@@ -74,14 +74,23 @@ async function promptSecret(message) {
 /** Interactive setup used by `--login` and by the ACP terminal auth method. */
 async function loginFlow(argv) {
   const opts = parseArgs(argv);
-  if (!process.stdin.isTTY) {
-    throw new Error("Interactive login needs a terminal. Set NINE_ROUTER_API_KEY instead, or run `9router acp --login` in a shell.");
-  }
+  const isTty = Boolean(process.stdin.isTTY);
   const current = resolveCredentials(opts);
-  const url = (await promptLine("9router gateway URL", opts.url || current.baseUrl || DEFAULT_URL)).replace(/\/+$/, "");
+  // Headless is allowed when nothing has to be asked: URL has a default and the
+  // password comes from the environment (NINE_ROUTER_PASSWORD).
+  const url = (
+    isTty
+      ? await promptLine("9router gateway URL", opts.url || current.baseUrl || DEFAULT_URL)
+      : opts.url || current.baseUrl || DEFAULT_URL
+  ).replace(/\/+$/, "");
   process.stderr.write(`Logging in to ${url}…\n`);
-  const password = opts.password || process.env.NINE_ROUTER_PASSWORD || (await promptSecret("Dashboard password"));
-  if (!password) throw new Error("Password required");
+  const password =
+    opts.password || process.env.NINE_ROUTER_PASSWORD || (isTty ? await promptSecret("Dashboard password") : null);
+  if (!password) {
+    throw new Error(
+      "Interactive login needs a terminal. Set NINE_ROUTER_PASSWORD (or NINE_ROUTER_API_KEY), or run `9router acp --login` in a shell."
+    );
+  }
 
   const { login, getOrCreateApiKey } = require("../commands/connect");
   const cookie = await login(url, password);

@@ -11,15 +11,20 @@ const os = require("os");
 const { TOOL_IDS, CLAUDE_MODELS, resolveTools } = require("./connectTools");
 
 const DEFAULT_MODEL = "cc/claude-sonnet-5";
+const DEFAULT_SERVER = "http://127.0.0.1:20128";
 
 const HELP = `
-Usage: 9router connect <server-url> [options]
+Usage: 9router connect [server-url] [tools...]
 
 Configure CLI tools on THIS machine to use a remote 9router server.
 No local server is started. Run without installing:
 
+  npx 9router connect zed
   npx 9router connect http://<server-host>:20128
   npx 9router connect http://<server-host>:20128 --tools claude,codex,opencode
+
+Server URL is optional and defaults to ${DEFAULT_SERVER}.
+Tools may be given as bare words (9router connect zed) or via --tools.
 
 Options:
   --tools <list>         Comma-separated tools to configure (prompted if omitted
@@ -54,12 +59,13 @@ function parseArgs(argv) {
     if (a === "--password") opts.password = next();
     else if (a === "--key-name") opts.keyName = next();
     else if (a === "--api-key") opts.apiKey = next();
-    else if (a === "--tools") opts.tools = next().split(",");
+    else if (a === "--tools") opts.tools = [...(opts.tools || []), ...next().split(",")];
     else if (a === "--model") opts.model = next();
     else if (a === "--print-env") opts.printEnv = true;
     else if (a === "--reset") opts.reset = true;
     else if (a === "-h" || a === "--help") opts.help = true;
     else if (a.startsWith("--") && CLAUDE_MODELS.some((m) => `--${m.flag}` === a)) opts.models[a.slice(2)] = next();
+    else if (!a.startsWith("-") && TOOL_IDS.includes(a)) opts.tools = [...(opts.tools || []), a];
     else if (!a.startsWith("-") && !opts.url) opts.url = a;
     else throw new Error(`Unknown option: ${a}`);
   }
@@ -187,7 +193,7 @@ async function runConnect(argv) {
     console.log(HELP);
     return 0;
   }
-  if (!opts.reset && !opts.url) {
+  if (!opts.reset && !opts.url && !opts.tools) {
     console.log(HELP);
     return 1;
   }
@@ -210,7 +216,7 @@ async function runConnect(argv) {
     return failed ? 1 : 0;
   }
 
-  const server = normalizeServerUrl(opts.url);
+  const server = normalizeServerUrl(opts.url || DEFAULT_SERVER);
   const isRemoteHttp = server.startsWith("http://") && !/^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|$)/.test(server);
   if (isRemoteHttp) {
     console.log("\x1b[33m⚠ Plain HTTP: password and API key travel unencrypted. Use only on a trusted LAN/VPN.\x1b[0m");
