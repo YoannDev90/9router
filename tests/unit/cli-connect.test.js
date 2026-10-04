@@ -218,6 +218,69 @@ describe("zed tool writer", () => {
   });
 });
 
+describe("opencode tool writer", () => {
+  let home;
+  beforeEach(() => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), "9r-connect-oc-"));
+    vi.spyOn(os, "homedir").mockReturnValue(home);
+    vi.stubEnv("XDG_CONFIG_HOME", "");
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  it("opencode resyncs its static model list from the gateway and drops dead entries", async () => {
+    const f = path.join(home, ".config", "opencode", "opencode.json");
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.writeFileSync(
+      f,
+      JSON.stringify({
+        theme: "dark",
+        provider: { "9router": { npm: "@ai-sdk/openai-compatible", options: { apiKey: "sk-old" }, models: { "oc/dead-model": { name: "oc/dead-model" } } } },
+        model: "9router/oc/dead-model",
+        agent: { explorer: { model: "9router/oc/dead-model" } },
+      })
+    );
+    const models = [
+      { id: "oc/live-a", owned_by: "opencode" },
+      { id: "web/search", owned_by: "or", kind: "webSearch" },
+      { id: "oc/live-b", owned_by: "opencode", capabilities: { tools: false } },
+    ];
+    await tool("opencode").apply({ ...CTX, model: "oc/live-a", models });
+    const cfg = readJson(f);
+    expect(cfg.theme).toBe("dark");
+    // dead entry gone, non-LLM/non-tool endpoints filtered out
+    expect(Object.keys(cfg.provider["9router"].models)).toEqual(["oc/live-a"]);
+    expect(cfg.provider["9router"].options.baseURL).toBe("http://gw.test:20128/v1");
+    expect(cfg.provider["9router"].options.apiKey).toBe(CTX.apiKey);
+    // stale default followed the resync to a live model
+    expect(cfg.model).toBe("9router/oc/live-a");
+    expect(cfg.agent.explorer.model).toBe("9router/oc/live-a");
+    await tool("opencode").reset();
+    expect(readJson(f).provider?.["9router"]).toBeUndefined();
+  });
+
+  it("opencode keeps the current default when it survives and fails open without a model list", async () => {
+    const f = path.join(home, ".config", "opencode", "opencode.json");
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.writeFileSync(
+      f,
+      JSON.stringify({ provider: { "9router": { models: { "oc/keep": { name: "oc/keep" } } } }, model: "9router/oc/keep" })
+    );
+    // still listed → default untouched
+    await tool("opencode").apply({ ...CTX, model: "oc/other", models: [{ id: "oc/keep" }, { id: "oc/other" }] });
+    expect(readJson(f).model).toBe("9router/oc/keep");
+    // gateway down (no list) → existing entries kept as-is, default kept
+    await tool("opencode").apply({ ...CTX, model: "cc/claude-opus-5" });
+    const cfg = readJson(f);
+    expect(Object.keys(cfg.provider["9router"].models)).toEqual(["oc/keep", "oc/other"]);
+    expect(cfg.model).toBe("9router/oc/keep");
+    expect(cfg.agent.explorer.model).toBe("9router/oc/keep");
+  });
+});
+
 describe("resolveSelfBin", () => {
   const { resolveSelfBin } = tools.__test__;
   afterEach(() => vi.unstubAllEnvs());

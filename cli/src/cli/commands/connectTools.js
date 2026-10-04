@@ -141,21 +141,35 @@ const opencode = {
   id: "opencode",
   name: "OpenCode",
   paths: () => [opencodePath()],
-  async apply({ baseUrl, apiKey, model }) {
+  async apply({ baseUrl, apiKey, model, models }) {
     const file = opencodePath();
     const cfg = readJson(file) || {};
     cfg.provider = cfg.provider || {};
     const p = cfg.provider["9router"] || { npm: "@ai-sdk/openai-compatible", options: {}, models: {} };
     p.options = { ...p.options, baseURL: v1(baseUrl), apiKey };
-    p.models = p.models || {};
-    p.models[model] = { name: model, modalities: { input: ["text", "image"], output: ["text"] } };
+    const served = Array.isArray(models) && models.length ? models : null;
+    // opencode lists models statically in its config — resync from the gateway
+    // on every connect so dead endpoints drop out and new ones appear. Gateway
+    // down → fail-open: keep whatever the file already had.
+    const list = served ? pickAgentModels(served) : Object.keys(p.models || {}).map((id) => ({ id }));
+    if (list.length === 0) list.push({ id: model });
+    p.models = {};
+    for (const m of list) {
+      p.models[m.id] = { name: m.id, modalities: { input: ["text", "image"], output: ["text"] } };
+    }
     cfg.provider["9router"] = p;
-    cfg.model = `9router/${model}`;
+    // Keep the user's current default if it survived the resync, else the
+    // requested model, else the first live one. Never point outside the list.
+    const current = (cfg.model || "").startsWith("9router/") ? cfg.model.slice("9router/".length) : null;
+    let nextDefault = list[0].id;
+    if (current && p.models[current]) nextDefault = current;
+    else if (p.models[model]) nextDefault = model;
+    cfg.model = `9router/${nextDefault}`;
     cfg.agent = cfg.agent || {};
     cfg.agent.explorer = {
       description: "Fast explorer subagent for codebase exploration",
       mode: "subagent",
-      model: `9router/${model}`,
+      model: `9router/${nextDefault}`,
     };
     writeJson(file, cfg);
     return [file];
@@ -331,7 +345,7 @@ const ZED_DEFAULT_CONTEXT = 200000;
 
 // Combos first (owned_by: "combo"), then tool-capable models. Non-LLM endpoints
 // (webSearch/webFetch, TTS, …) carry a `kind` and are useless to an agent.
-function zedPickModels(models) {
+function pickAgentModels(models) {
   const usable = (models || []).filter((m) => m?.id && !m.kind && m.capabilities?.tools !== false);
   const combos = usable.filter((m) => m.owned_by === "combo");
   const rest = usable.filter((m) => m.owned_by !== "combo");
@@ -371,7 +385,7 @@ const zed = {
   async apply({ baseUrl, apiKey, model, models }) {
     const file = zedPath();
     const cfg = readJson(file) || {};
-    const picked = zedPickModels(Array.isArray(models) && models.length ? models : [{ id: model }]);
+    const picked = pickAgentModels(Array.isArray(models) && models.length ? models : [{ id: model }]);
     cfg.language_models = cfg.language_models || {};
     const providers = { ...(cfg.language_models.openai_compatible || {}) };
     delete providers[ZED_PROVIDER_ID];
@@ -430,5 +444,5 @@ module.exports = {
   TOOL_IDS,
   CLAUDE_MODELS,
   resolveTools,
-  __test__: { stripTrailingCommas, zedPickModels, zedModelEntry, ZED_PROVIDER_ID, zedPath, acpAvailable, resolveSelfBin },
+  __test__: { stripTrailingCommas, zedPickModels: pickAgentModels, pickAgentModels, zedModelEntry, ZED_PROVIDER_ID, zedPath, acpAvailable, resolveSelfBin },
 };
