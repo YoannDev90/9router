@@ -19,6 +19,7 @@ import { resolveZedModels } from "open-sse/shared/zedAuth.js";
 import { updateProviderCredentials } from "@/sse/services/tokenRefresh";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { capabilitiesFromServiceKind, getCapabilitiesForModel, aggregateComboCapabilities } from "open-sse/providers/capabilities.js";
+import { FILTERS } from "@/app/api/providers/suggested-models/filters.js";
 
 // Qoder shares one live resolver across intl (qoder) and CN (qoder-cn); the
 // credentials carry the provider id so qoderModels picks the right region's
@@ -310,6 +311,37 @@ function comboSeatLimits(combo, combosByName, visiting = new Set()) {
     contextWindow: Number.isFinite(contextWindow) ? contextWindow : undefined,
     maxOutput: Number.isFinite(maxOutput) ? maxOutput : undefined,
   };
+}
+
+// Live model ids for noAuth providers (OpenCode Free, mimo-free, …). The
+// browser-side helper (shared/utils/providerModelsFetcher) fetches a relative
+// URL and can't run inside a route handler, so hit the provider's public
+// endpoint directly, through the same FILTERS as /api/providers/suggested-models.
+const noAuthIdsCache = new Map(); // url → { ids, expiresAt }
+const NO_AUTH_IDS_TTL_MS = 10 * 60 * 1000;
+
+async function fetchNoAuthModelIds(fetcher) {
+  if (!fetcher?.url || !fetcher?.type) return [];
+  const hit = noAuthIdsCache.get(fetcher.url);
+  if (hit && Date.now() < hit.expiresAt) return hit.ids;
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    const res = await fetch(fetcher.url, { cache: "no-store", signal: controller.signal });
+    clearTimeout(timeoutId);
+    if (!res.ok) return [];
+    const json = await res.json();
+    const raw = json.data ?? json.models ?? json;
+    const filter = FILTERS[fetcher.type];
+    if (!filter) return [];
+    const ids = (filter(Array.isArray(raw) ? raw : []) || [])
+      .map((m) => m?.id)
+      .filter((id) => typeof id === "string" && id.trim() !== "");
+    noAuthIdsCache.set(fetcher.url, { ids, expiresAt: Date.now() + NO_AUTH_IDS_TTL_MS });
+    return ids;
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -616,6 +648,52 @@ export async function buildModelsList(kindFilter, options = {}) {
           owned_by: outputAlias,
         });
       }
+    }
+  }
+
+  // noAuth providers never get a connection row, so the connection loop above
+  // can't see them — yet their models route with zero credentials. Publish them
+  // (static registry ids + the provider's public modelsFetcher, cached), or
+  // OpenAI-compatible clients (Zed, ACP agents, …) see a near-empty
+  // /v1/models while /v1/chat/completions works fine for the same models.
+  for (const [providerId, provider] of Object.entries(AI_PROVIDERS)) {
+    if (provider?.noAuth !== true) continue;
+    if (activeConnectionByProvider.has(providerId)) continue;
+    if (!providerMatchesKinds(providerId, kindFilter)) continue;
+
+    const staticAlias = PROVIDER_ID_TO_ALIAS[providerId] || providerId;
+    const outputAlias = (getProviderAlias(providerId) || staticAlias).trim();
+    const providerModels = PROVIDER_MODELS[staticAlias] || [];
+
+    let rawModelIds = providerModels.map((model) => model.id);
+    // passthroughModels providers (OpenCode Free, …) keep only overrides in the
+    // static registry — the full list lives on the public modelsFetcher endpoint.
+    const needsLiveIds =
+      provider.modelsFetcher &&
+      (provider.passthroughModels === true || rawModelIds.length === 0);
+    if (needsLiveIds && !skipDynamicFetch) {
+      const liveIds = await fetchNoAuthModelIds(provider.modelsFetcher);
+      rawModelIds = Array.from(new Set([...rawModelIds, ...liveIds]));
+    }
+
+    const staticKindById = new Map(providerModels.map((m) => [m.id, modelKind(m)]));
+    for (const modelId of rawModelIds) {
+      const kind = staticKindById.get(modelId) || inferKindFromUnknownModelId(modelId);
+      if (!kindFilter.includes(kind)) continue;
+      if (isDisabled(outputAlias, modelId) || isDisabled(staticAlias, modelId)) continue;
+
+      const model = {
+        id: `${outputAlias}/${modelId}`,
+        object: "model",
+        owned_by: outputAlias,
+      };
+      if (kind === LLM_KIND) {
+        const caps = getCapabilitiesForModel(staticAlias, modelId);
+        if (caps) model.capabilities = caps;
+        if (Number.isFinite(caps?.contextWindow)) model.context_length = caps.contextWindow;
+        if (Number.isFinite(caps?.maxOutput)) model.max_completion_tokens = caps.maxOutput;
+      }
+      models.push(model);
     }
   }
 

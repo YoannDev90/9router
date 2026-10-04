@@ -5,6 +5,7 @@
 - **CLI**: add `connect zed` — writes Zed's `language_models.openai_compatible` provider (models pre-filled, key stays in `ROUTER9_API_KEY`) and the `agent_servers` ACP entry
 
 ## Fixes
+- **API**: `GET /v1/models` now publishes noAuth providers' models (OpenCode Free, mmf, …) — they route with zero credentials but were invisible to OpenAI-compatible clients (Zed, ACP agents) whenever any other provider had a connection
 - **CLI**: `connect [server-url] [tools...]` — a bare tool name (`9router connect zed`) is no longer swallowed as the server URL; server URL defaults to `http://127.0.0.1:20128`
 - **CLI**: `acp --login` now runs headless when `NINE_ROUTER_PASSWORD` is set (terminal still required for interactive prompts)
 
