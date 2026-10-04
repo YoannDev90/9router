@@ -141,11 +141,16 @@ async function getOrCreateApiKey(server, cookie, keyName) {
   return { key: created.data.key, created: true };
 }
 
-async function listModels(server, apiKey) {
+async function fetchModels(server, apiKey) {
   const res = await request(`${server}/v1/models`, { apiKey });
   if (res.status === 401) throw new Error("API key rejected by server (/v1/models returned 401)");
   if (res.status !== 200) return null;
-  return new Set((res.data?.data || []).map((m) => m.id));
+  return res.data?.data || [];
+}
+
+async function listModels(server, apiKey) {
+  const data = await fetchModels(server, apiKey);
+  return data ? new Set(data.map((m) => m.id)) : null;
 }
 
 async function promptTools() {
@@ -223,7 +228,8 @@ async function runConnect(argv) {
     console.log(`• ${result.created ? "Created" : "Reusing"} API key "${opts.keyName}" (${maskKey(apiKey)})`);
   }
 
-  const available = await listModels(server, apiKey);
+  const modelData = await fetchModels(server, apiKey);
+  const available = modelData ? new Set(modelData.map((m) => m.id)) : null;
   const warnMissing = (label, model, flag) => {
     if (available && !available.has(model)) {
       console.log(`\x1b[33m⚠ ${label}: "${model}" not listed by server — override with ${flag} <model>\x1b[0m`);
@@ -240,12 +246,13 @@ async function runConnect(argv) {
   const model = opts.model || DEFAULT_MODEL;
   if (tools.some((t) => t.id !== "claude")) warnMissing("model", model, "--model");
 
-  const ctx = { baseUrl: server, apiKey, model, claudeModels };
+  const ctx = { baseUrl: server, apiKey, model, claudeModels, models: modelData || [] };
   let failed = 0;
   for (const t of tools) {
     try {
       const files = await t.apply(ctx);
       console.log(`✅ ${t.name} → ${files.join(", ")}`);
+      if (t.hint) console.log(t.hint(ctx));
     } catch (err) {
       failed++;
       console.log(`❌ ${t.name}: ${err.message}`);
@@ -266,4 +273,11 @@ async function runConnect(argv) {
   return failed ? 1 : 0;
 }
 
-module.exports = { run, __test__: { parseArgs, normalizeServerUrl, extractAuthCookie, maskKey, Cancelled } };
+module.exports = {
+  run,
+  login,
+  getOrCreateApiKey,
+  normalizeServerUrl,
+  maskKey,
+  __test__: { parseArgs, normalizeServerUrl, extractAuthCookie, maskKey, fetchModels, listModels, Cancelled },
+};

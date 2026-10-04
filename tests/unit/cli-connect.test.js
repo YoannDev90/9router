@@ -84,7 +84,11 @@ describe("connect tool writers", () => {
       const written = await t.apply(CTX);
       expect(written.length).toBeGreaterThan(0);
       // Key may live in just one of the files (cline: secrets.json).
-      expect(written.some((f) => fs.readFileSync(f, "utf8").includes(CTX.apiKey))).toBe(true);
+      // Zed opts out (keyInFile:false): settings.json is plaintext, the key
+      // travels via the ROUTER9_API_KEY env var instead.
+      if (t.keyInFile !== false) {
+        expect(written.some((f) => fs.readFileSync(f, "utf8").includes(CTX.apiKey))).toBe(true);
+      }
       if (process.platform !== "win32") {
         for (const f of written) expect(fs.statSync(f).mode & 0o777).toBe(0o600);
       }
@@ -135,6 +139,77 @@ describe("connect tool writers", () => {
     const state = readJson(path.join(home, ".cline", "data", "globalState.json"));
     expect(state.openAiBaseUrl).toBe("http://gw.test:20128");
     expect((await tool("cline").reset()).length).toBe(2);
+  });
+});
+
+describe("zed tool writer", () => {
+  let home;
+  const f = () => path.join(home, ".config", "zed", "settings.json");
+  beforeEach(() => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), "9r-connect-zed-"));
+    vi.spyOn(os, "homedir").mockReturnValue(home);
+    vi.stubEnv("XDG_CONFIG_HOME", "");
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  it("writes an OpenAI-compatible provider with combos first, capped, and never the API key", async () => {
+    const models = [
+      { id: "kr/claude-sonnet-4.5", owned_by: "kr", capabilities: { tools: true }, context_length: 200000, max_completion_tokens: 64000 },
+      { id: "my-stack", owned_by: "combo", capabilities: { tools: true }, context_length: 128000 },
+      { id: "no-tools", owned_by: "glm", capabilities: { tools: false } },
+      { id: "web/search", owned_by: "or", kind: "webSearch" },
+      { id: "plain", owned_by: "x" },
+    ];
+    await tool("zed").apply({ ...CTX, models });
+    const cfg = readJson(f());
+    const p = cfg.language_models.openai_compatible.router9;
+    expect(p.api_url).toBe("http://gw.test:20128/v1");
+    expect(p.available_models.map((m) => m.name)).toEqual(["my-stack", "kr/claude-sonnet-4.5", "plain"]);
+    expect(p.available_models[0].max_tokens).toBe(128000);
+    expect(p.available_models[0].max_output_tokens).toBeUndefined();
+    expect(p.available_models[1].max_output_tokens).toBe(64000);
+    // default context when the server omits it
+    expect(p.available_models[2].max_tokens).toBe(200000);
+    // plaintext settings.json must never hold the key
+    expect(JSON.stringify(cfg)).not.toContain(CTX.apiKey);
+    await tool("zed").reset();
+    const after = readJson(f());
+    expect(after.language_models?.openai_compatible?.router9).toBeUndefined();
+  });
+
+  it("caps the model list and keeps unrelated Zed settings", async () => {
+    fs.mkdirSync(path.dirname(f()), { recursive: true });
+    fs.writeFileSync(f(), JSON.stringify({ theme: "one", language_models: { openai_compatible: { other: { api_url: "http://x/v1" } } } }));
+    const models = Array.from({ length: 40 }, (_, i) => ({ id: `m${i}`, owned_by: "p" }));
+    await tool("zed").apply({ ...CTX, models });
+    const cfg = readJson(f());
+    expect(cfg.theme).toBe("one");
+    expect(cfg.language_models.openai_compatible.other.api_url).toBe("http://x/v1");
+    expect(cfg.language_models.openai_compatible.router9.available_models).toHaveLength(25);
+    await tool("zed").reset();
+    expect(readJson(f()).language_models.openai_compatible.other.api_url).toBe("http://x/v1");
+  });
+
+  it("falls back to the single ctx.model when the server returned no model list", async () => {
+    await tool("zed").apply({ ...CTX, models: [] });
+    const p = readJson(f()).language_models.openai_compatible.router9;
+    expect(p.available_models).toEqual([{ name: CTX.model, display_name: CTX.model, max_tokens: 200000 }]);
+  });
+
+  it("wires the ACP agent server only when 9router acp ships in this package", async () => {
+    await tool("zed").apply({ ...CTX, models: [] });
+    const cfg = readJson(f());
+    if (tools.__test__.acpAvailable()) {
+      expect(cfg.agent_servers["9router"]).toEqual({ type: "custom", command: "9router", args: ["acp"] });
+    } else {
+      expect(cfg.agent_servers).toBeUndefined();
+    }
+    await tool("zed").reset();
+    expect(readJson(f()).agent_servers?.["9router"]).toBeUndefined();
   });
 });
 
