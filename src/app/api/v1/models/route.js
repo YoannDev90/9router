@@ -658,6 +658,10 @@ export async function buildModelsList(kindFilter, options = {}) {
   // /v1/models while /v1/chat/completions works fine for the same models.
   for (const [providerId, provider] of Object.entries(AI_PROVIDERS)) {
     if (provider?.noAuth !== true) continue;
+    // hidden = retired/free-ended upstreams (mimo-free, mmf, …) the registry
+    // keeps only for routing legacy ids — publishing them makes pickers offer
+    // models whose upstream now answers 400 "Unsupported model".
+    if (provider?.hidden === true) continue;
     if (activeConnectionByProvider.has(providerId)) continue;
     if (!providerMatchesKinds(providerId, kindFilter)) continue;
 

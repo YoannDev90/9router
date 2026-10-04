@@ -56,6 +56,9 @@ describe("/v1/models noAuth providers", () => {
 
     expect(ids).not.toContain("oc/deepseek-v4-flash-free");
     expect(ids).not.toContain("oc/paid-only-model");
+    // hidden providers (mimo-free/mmf — upstream ended the free channel) stay unroutable-by-list
+    expect(ids).not.toContain("mmf/mimo-auto");
+    expect(ids).not.toContain("mimo-free/mimo-auto");
     expect(new Set(ids).size).toBe(ids.length);
   });
 
