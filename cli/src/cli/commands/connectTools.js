@@ -347,6 +347,22 @@ function zedModelEntry(m) {
 // The ACP subcommand ships in this same package — only wire it up when present.
 const acpAvailable = () => fs.existsSync(path.join(__dirname, "acp.js"));
 
+// GUI-launched editors (Zed, …) inherit a login PATH that often misses
+// npm/pnpm global bin dirs — resolve our own executable at connect time so the
+// editor can spawn it regardless of its environment.
+function resolveSelfBin() {
+  const bin = process.platform === "win32" ? "9router.cmd" : "9router";
+  for (const dir of String(process.env.PATH || "").split(path.delimiter)) {
+    if (!dir) continue;
+    const candidate = path.join(dir, bin);
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch {}
+  }
+  return bin;
+}
+
 const zed = {
   id: "zed",
   name: "Zed",
@@ -366,7 +382,7 @@ const zed = {
     cfg.language_models.openai_compatible = providers;
     if (acpAvailable()) {
       cfg.agent_servers = cfg.agent_servers || {};
-      cfg.agent_servers["9router"] = { type: "custom", command: "9router", args: ["acp"] };
+      cfg.agent_servers["9router"] = { type: "custom", command: resolveSelfBin(), args: ["acp"] };
     }
     writeJson(file, cfg);
     return [file];
@@ -414,5 +430,5 @@ module.exports = {
   TOOL_IDS,
   CLAUDE_MODELS,
   resolveTools,
-  __test__: { stripTrailingCommas, zedPickModels, zedModelEntry, ZED_PROVIDER_ID, zedPath, acpAvailable },
+  __test__: { stripTrailingCommas, zedPickModels, zedModelEntry, ZED_PROVIDER_ID, zedPath, acpAvailable, resolveSelfBin },
 };

@@ -204,12 +204,36 @@ describe("zed tool writer", () => {
     await tool("zed").apply({ ...CTX, models: [] });
     const cfg = readJson(f());
     if (tools.__test__.acpAvailable()) {
-      expect(cfg.agent_servers["9router"]).toEqual({ type: "custom", command: "9router", args: ["acp"] });
+      const entry = cfg.agent_servers["9router"];
+      expect(entry).toEqual({ ...entry, type: "custom", args: ["acp"] });
+      // Absolute path resolved at connect time, or bare fallback — never a
+      // stale/relative string (GUI editors miss the pnpm bin dir in PATH).
+      expect(typeof entry.command).toBe("string");
+      expect(entry.command === "9router" || /[\\/]9router(\.cmd)?$/.test(entry.command)).toBe(true);
     } else {
       expect(cfg.agent_servers).toBeUndefined();
     }
     await tool("zed").reset();
     expect(readJson(f()).agent_servers?.["9router"]).toBeUndefined();
+  });
+});
+
+describe("resolveSelfBin", () => {
+  const { resolveSelfBin } = tools.__test__;
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("finds the first executable 9router on PATH", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "9r-bin-"));
+    const bin = path.join(dir, process.platform === "win32" ? "9router.cmd" : "9router");
+    fs.writeFileSync(bin, "#!/bin/sh\n", { mode: 0o755 });
+    vi.stubEnv("PATH", `${dir}${path.delimiter}${dir}`);
+    expect(resolveSelfBin()).toBe(bin);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("falls back to the bare command when PATH has no match", () => {
+    vi.stubEnv("PATH", "");
+    expect(resolveSelfBin()).toBe(process.platform === "win32" ? "9router.cmd" : "9router");
   });
 });
 
