@@ -80,10 +80,11 @@ if (args[0] === "xai" && args[1] === "video") {
   return;
 }
 
-// `9router connect <url>` configures local CLI tools against a remote server —
-// no local server, no runtime deps. Usable via `npx 9router connect …`.
-if (args[0] === "connect") {
-  const { run } = require("./src/cli/commands/connect");
+// `9router connect <url>` configures local CLI tools against a remote server, and
+// `9router show` prints what they're currently set to — no local server, no
+// runtime deps. Usable via `npx 9router …`.
+if (args[0] === "connect" || args[0] === "show") {
+  const { run } = require(args[0] === "show" ? "./src/cli/commands/show" : "./src/cli/commands/connect");
   run(args.slice(1))
     .then((code) => process.exit(code))
     .catch((err) => {
@@ -186,6 +187,8 @@ Commands:
   acp                  Run the Agent Client Protocol agent for Zed & other ACP
                       editors (usually spawned by the editor itself)
                       (see: ${APP_NAME} acp --help)
+  show [tool…]        Show each CLI tool's current 9router config and models
+                      (e.g. 9router show claude)
   xai video --prompt "..." --output video.mp4
                       Generate a Grok Imagine video via the running gateway
                       (see: ${APP_NAME} xai video --help)
