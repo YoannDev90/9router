@@ -87,10 +87,10 @@ function createAgentApp(acp, { opts = {}, version = "0.0.0", gatewayFactory, sto
     return methods;
   }
 
-  async function buildOptionsFor(session) {
+  async function buildOptionsFor(session, { fresh = false } = {}) {
     let models = [];
     try {
-      models = await currentGateway().models();
+      models = await currentGateway().models({ fresh });
     } catch (err) {
       log(`model list unavailable: ${err.message}`);
     }
@@ -295,6 +295,20 @@ function createAgentApp(acp, { opts = {}, version = "0.0.0", gatewayFactory, sto
     };
 
     try {
+      if (!session.model) {
+        // Session created while the gateway had no usable model (cold start or
+        // outage) — refresh once instead of shipping `model: null` upstream.
+        const options = await buildOptionsFor(session, { fresh: true });
+        session.model = options.find((o) => o.id === "model")?.currentValue || opts.model || null;
+        if (session.model) log(`session ${sessionId}: model recovered (${session.model})`);
+      }
+      if (!session.model) {
+        throw protocolError(
+          acp,
+          "No model selected: the gateway returned no models. Check that 9Router is running, then pick a model in the agent's model selector.",
+          -32001
+        );
+      }
       const { stopReason } = await runTurn({
         session,
         ctx: toolCtx,

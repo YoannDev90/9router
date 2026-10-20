@@ -315,6 +315,50 @@ describe("ACP agent prompt turn", () => {
     ).rejects.toThrow(/Unknown session/);
   });
 
+  it("recovers a session created while the gateway listed no models", async () => {
+    const gateway = fakeGateway([{ content: "back online." }]);
+    let list = [];
+    gateway.models = async () => list;
+    const sentModels = [];
+    const chat = gateway.chat.bind(gateway);
+    gateway.chat = async (args) => {
+      sentModels.push(args.model);
+      return chat(args);
+    };
+
+    const out = await withAgent({
+      gateway,
+      cwd,
+      onSession: async ({ ctx }) => {
+        const s = await newSession(ctx, cwd);
+        expect(s.configOptions.find((o) => o.id === "model")).toBeUndefined();
+        list = [MODEL]; // gateway recovered between session/new and the first prompt
+        const res = await prompt(ctx, s.sessionId, "hi");
+        return { res };
+      },
+    });
+
+    expect(out.res.stopReason).toBe("end_turn");
+    expect(sentModels).toEqual([MODEL.id]);
+  });
+
+  it("fails with an actionable error when no model can be recovered", async () => {
+    const gateway = fakeGateway([{ content: "x" }]);
+    gateway.models = async () => [];
+    await expect(
+      withAgent({
+        gateway,
+        cwd,
+        onSession: async ({ ctx }) => {
+          const s = await newSession(ctx, cwd);
+          await prompt(ctx, s.sessionId, "hi");
+          return {};
+        },
+      })
+    ).rejects.toThrow(/No model selected/);
+    expect(gateway.calls.length).toBe(0);
+  });
+
   it("forwards prompt images to the gateway as image_url blocks", async () => {
     const gateway = fakeGateway([{ content: "I see a pixel." }]);
     await withAgent({
